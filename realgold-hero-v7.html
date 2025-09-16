@@ -99,12 +99,138 @@ function makeStratum(i){
   }
   p.needsUpdate=true; g.computeVertexNormals();
   const edges=new THREE.EdgesGeometry(g), opacity=lerp(0.5,0.1,t);
-  const mat=new THREE.LineBasicMaterial({c
+  const mat=new THREE.LineBasicMaterial({color:0xeaeaea,transparent:true,opacity});
+  const mesh=new THREE.LineSegments(edges,mat); mesh.rotation.x=-Math.PI/2; mesh.position.y=yFor(t); mesh.userData.layerIndex=i; return mesh;
+}
+for(let i=1;i<STRATA_COUNT;i++) strataGroup.add(makeStratum(i));
 
+// Surface gold specks
+const goldGroup=new THREE.Group(); scene.add(goldGroup);
+function makeGoldPoints(i){
+  const t=i/(STRATA_COUNT-1), y=yFor(t), count=IS_MOBILE?40:80, geo=new THREE.BufferGeometry(), pos=new Float32Array(count*3);
+  let n=0, tries=0; while(n<count && tries<count*10){ tries++;
+    const x=(Math.random()-0.5)*SIZE*0.92, z=(Math.random()-0.5)*SIZE*0.92;
+    const sx=x/SIZE+10.5+t*3.14159, sy=z/SIZE+10.5-t*3.14159, freq=1.0+t*1.6;
+    const v=fbm(sx*freq, sy*freq);
+    if(v>0.36+t*0.1){ pos[n*3]=x; pos[n*3+1]=y+(Math.random()-0.5)*SCAN_H*0.6; pos[n*3+2]=z; n++; }
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0,n*3),3));
+  const mat=new THREE.PointsMaterial({color:0xc9a227, size:IS_MOBILE?0.014:0.018, transparent:true, opacity:0.45, depthWrite:false, blending:THREE.AdditiveBlending});
+  const pts=new THREE.Points(geo,mat); pts.userData.layerIndex=i; return pts;
+}
+for(let i=0;i<STRATA_COUNT;i++) goldGroup.add(makeGoldPoints(i));
 
-      renderer.domElement.addEventListener('webglcontextlost', (e)=>{ e.preventDefault(); setTimeout(()=>location.reload(), 150); }, false);
-    })();
-  </script>
+// Scan slice + glow trail
+const SCAN=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(SIZE*0.985,SCAN_H,SIZE*0.985)), new THREE.LineBasicMaterial({color:0xc9a227}));
+const GLOW=new THREE.Mesh(new THREE.BoxGeometry(SIZE*0.985,SCAN_H,SIZE*0.985), new THREE.MeshBasicMaterial({color:0xc9a227,transparent:true,opacity:0.12,blending:THREE.AdditiveBlending}));
+const GLOW_T1=GLOW.clone(); GLOW_T1.material=GLOW.material.clone(); GLOW_T1.material.opacity=0.07; GLOW_T1.scale.y=1.8;
+const GLOW_T2=GLOW.clone(); GLOW_T2.material=GLOW.material.clone(); GLOW_T2.material.opacity=0.04; GLOW_T2.scale.y=3.0;
+scene.add(SCAN,GLOW,GLOW_T1,GLOW_T2);
+
+// Clip land above slice
+const plane=new THREE.Plane(new THREE.Vector3(0,-1,0),0);
+const clipMat=new THREE.MeshBasicMaterial({color:0xffffff,wireframe:true,clippingPlanes:[plane],transparent:true,opacity:0.18});
+const clipLand=new THREE.Mesh(landGeo.clone(),clipMat); clipLand.rotation.x=-Math.PI/2; clipLand.position.y=HALF-0.001; scene.add(clipLand);
+
+// --- Diagonal 2× orebody (point-cloud, fast & reliable) ---
+const oreUniforms={uSliceY:{value:0.0},uSliceLagY:{value:0.0},uW:{value:0.10}};
+const ORE_POINTS=IS_MOBILE?4000:7000;
+const rngOre=mulberry32(424242);
+const opos=new Float32Array(ORE_POINTS*3);
+const p0=new THREE.Vector3(-HALF*0.65,-HALF*0.25, HALF*0.65);
+const p1=new THREE.Vector3( HALF*0.65, HALF*0.65,-HALF*0.65);
+const dir=new THREE.Vector3().subVectors(p1,p0);
+for(let i=0;i<ORE_POINTS;i++){
+  const t=i/ORE_POINTS, base=new THREE.Vector3().copy(p0).addScaledVector(dir, t+(rngOre()-0.5)*0.06);
+  base.x+=(rngOre()-0.5)*0.60; base.y+=(rngOre()-0.5)*0.34; base.z+=(rngOre()-0.5)*0.60; // 2× envelope
+  opos[i*3]=base.x; opos[i*3+1]=base.y; opos[i*3+2]=base.z;
+}
+const oreGeo=new THREE.BufferGeometry(); oreGeo.setAttribute('position', new THREE.BufferAttribute(opos,3));
+const oreMat=new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+  uniforms:{ uSliceY:oreUniforms.uSliceY, uSliceLagY:oreUniforms.uSliceLagY, uW:oreUniforms.uW,
+             uBase:{value:new THREE.Color(0x4a3d12)}, uGold:{value:new THREE.Color(0xc9a227)},
+             uSize:{value:IS_MOBILE?2.0:2.6} },
+  vertexShader:`
+    uniform float uSliceY,uSliceLagY,uW,uSize; varying float vH;
+    void main(){
+      vec4 world=modelMatrix*vec4(position,1.0);
+      float d0=abs(world.y-uSliceY), d1=abs(world.y-uSliceLagY);
+      vH=smoothstep(uW*1.2,0.0,min(d0,d1));
+      gl_Position=projectionMatrix*viewMatrix*world;
+      gl_PointSize=uSize*(1.0+1.6*vH);
+    }`,
+  fragmentShader:`
+    precision mediump float; varying float vH; uniform vec3 uBase,uGold;
+    void main(){
+      vec2 uv=gl_PointCoord-0.5; float r=length(uv); if(r>0.5) discard;
+      float core=smoothstep(0.5,0.0,r);
+      vec3 col=mix(uBase,uGold,vH);
+      float a=core*(0.10+0.90*vH);
+      gl_FragColor=vec4(col,a);
+    }`
+});
+const orePts=new THREE.Points(oreGeo,oreMat); scene.add(orePts);
+
+// Sparkle highlight near slice
+const sparkGeo=new THREE.BufferGeometry();
+const SPARK=IS_MOBILE?1000:1600; const s=new Float32Array(SPARK*3);
+for(let i=0;i<SPARK;i++){ s[i*3]=(Math.random()-0.5)*SIZE*0.86; s[i*3+1]=(Math.random()-0.5)*SIZE*0.86; s[i*3+2]=(Math.random()-0.5)*SIZE*0.86; }
+sparkGeo.setAttribute('position', new THREE.BufferAttribute(s,3));
+const sparkMat=new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+  uniforms:{ uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10}, uSize:{value:IS_MOBILE?1.5:1.8},
+             uBase:{value:new THREE.Color(0x5a4a12)}, uGold:{value:new THREE.Color(0xc9a227)} },
+  vertexShader:`uniform float uSliceY,uSliceLagY,uW,uSize; varying float vH;
+    void main(){ vec4 w=modelMatrix*vec4(position,1.0);
+      float d=min(abs(w.y-uSliceY),abs(w.y-uSliceLagY));
+      vH=smoothstep(uW*1.2,0.0,d);
+      gl_Position=projectionMatrix*viewMatrix*w; gl_PointSize=uSize*(1.0+1.4*vH);} `,
+  fragmentShader:`precision mediump float; varying float vH; uniform vec3 uBase,uGold;
+    void main(){ vec2 uv=gl_PointCoord-0.5; float r=length(uv); if(r>0.5) discard;
+      float core=smoothstep(0.5,0.0,r); vec3 col=mix(uBase,uGold,vH); float a=core*(0.05+0.95*vH);
+      gl_FragColor=vec4(col,a);} `
+});
+scene.add(new THREE.Points(sparkGeo,sparkMat));
+
+// Input + animation
+let tAcc=0,dir=1,user=false,resTimer=null; const SPEED=IS_MOBILE?0.144:0.192, RESUME=550;
+function setFromX(x){ const r=renderer.domElement.getBoundingClientRect(); tAcc=clamp01((x-r.left)/r.width); }
+renderer.domElement.addEventListener('pointerdown',e=>{renderer.domElement.setPointerCapture(e.pointerId);user=true;el.classList.add('scrubbing');clearTimeout(resTimer);setFromX(e.clientX);e.preventDefault();},{passive:false});
+renderer.domElement.addEventListener('pointermove',e=>{if(user) setFromX(e.clientX);},{passive:true});
+function end(){ if(!user) return; user=false; el.classList.remove('scrubbing'); clearTimeout(resTimer); resTimer=setTimeout(()=>{},RESUME); }
+renderer.domElement.addEventListener('pointerup',end,{passive:true});
+renderer.domElement.addEventListener('pointerleave',end,{passive:true});
+renderer.domElement.addEventListener('pointercancel',end,{passive:true});
+
+let visible=true; (new IntersectionObserver(e=>{visible=e[0]?.isIntersecting??true;},{threshold:0.1})).observe(el);
+let yLag1=0.0,yLag2=0.0;
+
+const clock=new THREE.Clock();
+function frame(){
+  const dt=clock.getDelta();
+  if(!user){ tAcc+=dir*SPEED*dt; if(tAcc>1){tAcc=1;dir=-1;} else if(tAcc<0){tAcc=0;dir=1;} }
+  const y=yFor(tAcc);
+  const k1=4.0,k2=2.0; yLag1+=(y-yLag1)*k1*dt; yLag2+=(y-yLag2)*k2*dt;
+
+  SCAN.position.y=y; GLOW.position.y=y; GLOW_T1.position.y=yLag1; GLOW_T2.position.y=yLag2;
+  plane.constant=HALF-y;
+  oreUniforms.uSliceY.value=y; oreUniforms.uSliceLagY.value=yLag1;
+  sparkMat.uniforms.uSliceY.value=y; sparkMat.uniforms.uSliceLagY.value=yLag1;
+
+  const et=clock.elapsedTime;
+  land.rotation.z=Math.sin(et*0.08)*0.002; strataGroup.rotation.z=Math.sin(et*0.06)*0.0015;
+
+  // fade near layer
+  const idx=tAcc*(STRATA_COUNT-1), fall=6;
+  strataGroup.children.forEach(ch=>{const d=Math.abs((ch.userData.layerIndex||0)-idx); const near=Math.max(0,1-d/fall);
+    ch.material.opacity=THREE.MathUtils.lerp(0.05,0.6,near); ch.material.color.setHex(d<0.5?0xffffff:0xeaeaea); });
+
+  renderer.render(scene,camera);
+}
+function loop(){ if(visible) frame(); requestAnimationFrame(loop); }
+loop();
+</script>
 </body>
 </html>
 
