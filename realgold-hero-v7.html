@@ -3,13 +3,14 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>RealGold — Hero (ULTRA-LITE, transparent)</title>
+<title>RealGold — Hero (ULTRA-LITE DEBUG, transparent)</title>
 <style>
   html,body{height:100%;background:transparent!important;margin:0}
   #rg-root{position:fixed;inset:0;background:transparent!important;touch-action:none;cursor:grab}
   #rg-root.scrubbing{cursor:grabbing}
   canvas{display:block;width:100%;height:100%;background:transparent!important}
   .rg-fallback{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#ccc;font:14px/1.4 ui-sans-serif,system-ui;padding:1rem;text-align:center}
+  .rg-error{position:absolute;left:8px;right:8px;bottom:8px;background:#2b0000;color:#ffd7d7;border:1px solid #ff7373;border-radius:8px;padding:10px;font:12px/1.4 ui-sans-serif,system-ui;white-space:pre-wrap}
 </style>
 </head>
 <body>
@@ -17,79 +18,97 @@
 <noscript><div class="rg-fallback">Enable JavaScript to view the visualization.</div></noscript>
 
 <script>
-  // Read URL params early (e.g., ?zoom=1.45&dpr=1)
-  (function(){
-    var qs=new URLSearchParams(location.search||"");
-    window.__RG_CFG__={
-      zoom: Math.max(0.75, Math.min(2.0, parseFloat(qs.get('zoom')||'1.4'))),
-      dpr:  parseFloat(qs.get('dpr')||'0')
-    };
-  })();
+(function(){
+  const qs = new URLSearchParams(location.search || "");
+  window.__RG_CFG__ = {
+    zoom: Math.max(0.75, Math.min(2.0, parseFloat(qs.get('zoom')||'1.4'))),
+    dpr:  parseFloat(qs.get('dpr')||'0')
+  };
+})();
 </script>
 
 <script>
 (function loadThree(urls){
-  // Try multiple CDNs for THREE UMD build (no modules needed)
+  function showError(msg, err){
+    const el = document.getElementById('rg-root');
+    const box = document.createElement('div');
+    box.className = 'rg-error';
+    box.textContent = '[RealGold Hero] ' + msg + (err ? '\n' + (err.stack || err.message || err) : '');
+    el.appendChild(box);
+    if (err) console.error('[RealGold Hero] ' + msg, err);
+  }
+
   function next(){
-    if(!urls.length){
-      document.getElementById('rg-root').innerHTML =
-        '<div class="rg-fallback">Failed to load 3D engine (THREE).</div>';
-      return;
-    }
-    var src = urls.shift();
-    var s = document.createElement('script');
-    s.src = src; s.async = true; s.onload = function(){ if(!window.THREE){ next(); } else { start(); } };
-    s.onerror = function(){ s.remove(); next(); };
+    if(!urls.length){ showError('Failed to load THREE from all CDNs.'); return; }
+    const src = urls.shift();
+    const s = document.createElement('script');
+    s.src = src; s.async = true;
+    s.onload = function(){ if(!window.THREE){ next(); } else { try { start(); } catch(e){ showError('Runtime error after THREE loaded.', e); } } };
+    s.onerror = function(e){ s.remove(); next(); };
     document.head.appendChild(s);
   }
   next();
 
   function start(){
-    var THREE = window.THREE;
-    var el = document.getElementById('rg-root');
-    var isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const THREE = window.THREE;
+    const el = document.getElementById('rg-root');
 
-    // WebGL check
-    try{
-      var c=document.createElement('canvas');
-      if(!(c.getContext('webgl')||c.getContext('experimental-webgl'))){
-        el.innerHTML='<div class="rg-fallback">WebGL not available.</div>'; return;
-      }
-    }catch(e){ el.innerHTML='<div class="rg-fallback">WebGL init error.</div>'; return; }
+    // Guards
+    try {
+      const c = document.createElement('canvas');
+      const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+      if(!gl){ el.innerHTML = '<div class="rg-fallback">WebGL not available.</div>'; return; }
+    } catch(e) { showError('WebGL init error', e); return; }
+
+    // Helpers
+    const isMobile = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    const lerp = (a,b,t)=>a+(b-a)*t;
+    const clamp01 = x=>Math.max(0, Math.min(1, x));
+    const fade = t=>t*t*t*(t*(t*6-15)+10);
+    const mulberry32 = a => () => { let t=a+=0x6D2B79F5; t=Math.imul(t^t>>>15,t|1); t^=t+Math.imul(t^t>>>7,t|61); return ((t^t>>>14)>>>0)/4294967296; };
 
     // Renderer (transparent)
-    var DPR = Math.min((window.__RG_CFG__.dpr>0?window.__RG_CFG__.dpr:(window.devicePixelRatio||1)), isMobile?1.25:2);
-    var renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference: isMobile?'low-power':'high-performance' });
+    const DPR = Math.min((window.__RG_CFG__.dpr>0?window.__RG_CFG__.dpr:(window.devicePixelRatio||1)), isMobile?1.25:2);
+    const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference:isMobile?'low-power':'high-performance' });
     renderer.setPixelRatio(DPR);
     renderer.setSize(el.clientWidth, el.clientHeight);
     renderer.setClearColor(0x000000, 0);
     renderer.localClippingEnabled = true;
     el.appendChild(renderer.domElement);
 
-    var scene = new THREE.Scene();
+    const scene = new THREE.Scene();
 
-    // Camera (ZOOM makes cube larger by shrinking ortho size)
-    var BASE_ORTHO=3.6, ZOOM=window.__RG_CFG__.zoom||1.4, camera;
+    // Camera (ZOOM makes cube larger by shrinking ortho)
+    let camera;
+    const BASE_ORTHO = 3.6;
     function makeOrtho(){
-      var aspect = el.clientWidth/el.clientHeight;
-      var h=(BASE_ORTHO/ZOOM), w=h*aspect;
+      const aspect = el.clientWidth / el.clientHeight || 1;
+      const h = (BASE_ORTHO / (window.__RG_CFG__.zoom || 1.4));
+      const w = h * aspect;
       camera = new THREE.OrthographicCamera(-w, w, h, -h, 0.1, 100);
       camera.position.set(4,4,4);
       camera.lookAt(0,0,0);
     }
     makeOrtho();
-    window.addEventListener('resize', function(){
-      renderer.setSize(el.clientWidth, el.clientHeight);
-      makeOrtho();
-    });
+    window.addEventListener('resize', ()=>{ try{ renderer.setSize(el.clientWidth, el.clientHeight); makeOrtho(); }catch(e){ showError('Resize error', e); } });
 
-    // Helpers / constants
-    var SIZE=2.4, HALF=SIZE/2, SCAN_H=0.008*SIZE, STRATA=isMobile?24:48, gridTop=isMobile?64:96;
-    function lerp(a,b,t){return a+(b-a)*t;}
-    function clamp01(x){return Math.max(0,Math.min(1,x));}
-    function fade(t){return t*t*t*(t*(t*6-15)+10);}
-    function yFor(t){ return THREE.MathUtils.lerp(HALF-0.002-SCAN_H*0.5, -HALF+0.002+SCAN_H*0.5, t); }
-    function mulberry32(a){return function(){var t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
+    // Constants
+    const SIZE=2.4, HALF=SIZE/2, SCAN_H=0.008*SIZE, STRATA=isMobile?24:48, gridTop=isMobile?64:96;
+
+    // Smoke test (draw a tiny triangle in the corner quickly)
+    try{
+      const smoke = new THREE.LineSegments(
+        new THREE.EdgesGeometry(new THREE.BoxGeometry(0.2,0.2,0.2)),
+        new THREE.LineBasicMaterial({color:0x444444, transparent:true, opacity:0.6})
+      );
+      smoke.position.set(-HALF*0.8, -HALF*0.8, -HALF*0.8);
+      scene.add(smoke);
+      renderer.render(scene, camera);
+      scene.remove(smoke); // passed
+    }catch(e){ showError('Basic render failed', e); return; }
+
+    // Core pieces
+    function yFor(t){ return lerp(HALF-0.002-SCAN_H*0.5, -HALF+0.002+SCAN_H*0.5, t); }
 
     // Wire cube
     scene.add(new THREE.LineSegments(
@@ -98,153 +117,161 @@
     ));
 
     // Crown surface
-    var landGeo=new THREE.PlaneGeometry(SIZE*0.96,SIZE*0.96,gridTop,gridTop);
-    var rand=mulberry32(777), grad=[], i;
-    for(i=0;i<=gridTop;i++) grad[i]=Array(gridTop+1).fill(0).map(function(){return {x:rand()*2-1,y:rand()*2-1};});
-    function noise(x,y){
-      var xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
-      function dot(ix,iy){ var g=grad[(iy%(gridTop+1)+gridTop+1)%(gridTop+1)][(ix%(gridTop+1)+gridTop+1)%(gridTop+1)]; return g.x*(x-ix)+g.y*(y-iy); }
-      var u=fade(xf), v=fade(yf);
-      var n00=dot(xi,yi), n10=dot(xi+1,yi), n01=dot(xi,yi+1), n11=dot(xi+1,yi+1);
+    const landGeo=new THREE.PlaneGeometry(SIZE*0.96,SIZE*0.96,gridTop,gridTop);
+    const rand=mulberry32(777), grad=[];
+    for(let i=0;i<=gridTop;i++) grad[i]=Array(gridTop+1).fill(0).map(()=>({x:rand()*2-1,y:rand()*2-1}));
+    const noise=(x,y)=>{ const xi=Math.floor(x), yi=Math.floor(y), xf=x-xi, yf=y-yi;
+      const dot=(ix,iy)=>{ const g=grad[(iy%(gridTop+1)+gridTop+1)%(gridTop+1)][(ix%(gridTop+1)+gridTop+1)%(gridTop+1)]; return g.x*(x-ix)+g.y*(y-iy); };
+      const u=fade(xf), v=fade(yf); const n00=dot(xi,yi), n10=dot(xi+1,yi), n01=dot(xi,yi+1), n11=dot(xi+1,yi+1);
       return lerp(lerp(n00,n10,u), lerp(n01,n11,u), v);
-    }
-    function fbm(x,y){ var val=0,amp=0.6,freq=1.0; for(i=0;i<4;i++){ val+=amp*noise(x*freq,y*freq); amp*=0.5; freq*=2.02; } return val; }
-    var lpos=landGeo.attributes.position;
-    for(i=0;i<lpos.count;i++){ var xx=lpos.getX(i)/SIZE+10.5, yy=lpos.getY(i)/SIZE+10.5; lpos.setZ(i, fbm(xx,yy)*0.48*HALF); }
+    };
+    const fbm=(x,y)=>{ let val=0, amp=0.6, freq=1.0; for(let i=0;i<4;i++){ val+=amp*noise(x*freq,y*freq); amp*=0.5; freq*=2.02; } return val; };
+
+    const lpos=landGeo.attributes.position;
+    for(let i=0;i<lpos.count;i++){ const x=lpos.getX(i)/SIZE+10.5, y=lpos.getY(i)/SIZE+10.5; lpos.setZ(i, fbm(x,y)*0.48*HALF); }
     lpos.needsUpdate=true; landGeo.computeVertexNormals();
-    var land=new THREE.LineSegments(new THREE.EdgesGeometry(landGeo), new THREE.LineBasicMaterial({ color:0xeaeaea, transparent:true, opacity:1 }));
+
+    const land=new THREE.LineSegments(new THREE.EdgesGeometry(landGeo), new THREE.LineBasicMaterial({ color:0xeaeaea, transparent:true, opacity:1 }));
     land.rotation.x=-Math.PI/2; land.position.y=HALF-0.001; scene.add(land);
-    var topHeights=new Float32Array(lpos.count); for(i=0;i<lpos.count;i++) topHeights[i]=lpos.getZ(i);
+    const topHeights=new Float32Array(lpos.count); for(let i=0;i<lpos.count;i++) topHeights[i]=lpos.getZ(i);
 
     // Strata stack
-    var strataGroup=new THREE.Group(); scene.add(strataGroup);
+    const strataGroup=new THREE.Group(); scene.add(strataGroup);
     function makeStratum(k){
-      var t=k/(STRATA-1), g=new THREE.PlaneGeometry(SIZE*0.96,SIZE*0.96,gridTop,gridTop), p=g.attributes.position;
-      var blend=lerp(0.75,0.35,t), amp=lerp(0.20,0.10,t)*HALF, freq=1.0+t*1.6, off=t*3.14159;
-      for(var j=0;j<p.count;j++){
-        var x=p.getX(j)/SIZE+10.5, y=p.getY(j)/SIZE+10.5, base=topHeights[j]||0;
-        var n=fbm((x+off)*freq,(y-off)*freq);
-        var candidate=(blend*base + (1.0-blend)*(n*0.48*HALF));
+      const t=k/(STRATA-1), g=new THREE.PlaneGeometry(SIZE*0.96,SIZE*0.96,gridTop,gridTop), p=g.attributes.position;
+      const blend=lerp(0.75,0.35,t), amp=lerp(0.20,0.10,t)*HALF, freq=1.0+t*1.6, off=t*3.14159;
+      for(let j=0;j<p.count;j++){
+        const x=p.getX(j)/SIZE+10.5, y=p.getY(j)/SIZE+10.5, base=topHeights[j]||0;
+        const n=fbm((x+off)*freq,(y-off)*freq);
+        const candidate=(blend*base + (1.0-blend)*(n*0.48*HALF));
         p.setZ(j,(candidate/(0.48*HALF))*amp);
       }
       p.needsUpdate=true; g.computeVertexNormals();
-      var edges=new THREE.EdgesGeometry(g), opacity=lerp(0.5,0.1,t);
-      var mat=new THREE.LineBasicMaterial({ color:0xeaeaea, transparent:true, opacity:opacity });
-      var mesh=new THREE.LineSegments(edges,mat); mesh.rotation.x=-Math.PI/2; mesh.position.y=yFor(t); mesh.userData.layerIndex=k; return mesh;
+      const edges=new THREE.EdgesGeometry(g), opacity=lerp(0.5,0.1,t);
+      const mat=new THREE.LineBasicMaterial({ color:0xeaeaea, transparent:true, opacity });
+      const mesh=new THREE.LineSegments(edges,mat); mesh.rotation.x=-Math.PI/2; mesh.position.y=yFor(t); mesh.userData.layerIndex=k; return mesh;
     }
-    for(i=1;i<STRATA;i++) strataGroup.add(makeStratum(i));
+    for(let i=1;i<STRATA;i++) strataGroup.add(makeStratum(i));
 
     // Surface gold specks
-    var goldGroup=new THREE.Group(); scene.add(goldGroup);
+    const goldGroup=new THREE.Group(); scene.add(goldGroup);
     function makeGoldPoints(k){
-      var t=k/(STRATA-1), y=yFor(t), count=isMobile?40:80, geo=new THREE.BufferGeometry(), pos=new Float32Array(count*3);
-      var n=0, tries=0; while(n<count && tries<count*10){ tries++;
-        var x=(Math.random()-0.5)*SIZE*0.92, z=(Math.random()-0.5)*SIZE*0.92;
-        var sx=x/SIZE+10.5+t*3.14159, sy=z/SIZE+10.5-t*3.14159, fq=1.0+t*1.6;
-        var v=fbm(sx*fq, sy*fq);
+      const t=k/(STRATA-1), y=yFor(t), count=isMobile?40:80, geo=new THREE.BufferGeometry(), pos=new Float32Array(count*3);
+      let n=0, tries=0; while(n<count && tries<count*10){ tries++;
+        const x=(Math.random()-0.5)*SIZE*0.92, z=(Math.random()-0.5)*SIZE*0.92;
+        const sx=x/SIZE+10.5+t*3.14159, sy=z/SIZE+10.5-t*3.14159, fq=1.0+t*1.6;
+        const v=fbm(sx*fq, sy*fq);
         if(v>0.36+t*0.1){ pos[n*3]=x; pos[n*3+1]=y+(Math.random()-0.5)*SCAN_H*0.6; pos[n*3+2]=z; n++; }
       }
       geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0,n*3),3));
-      var mat=new THREE.PointsMaterial({ color:0xc9a227, size:isMobile?0.014:0.018, transparent:true, opacity:0.45, depthWrite:false, blending:THREE.AdditiveBlending });
-      var pts=new THREE.Points(geo,mat); pts.userData.layerIndex=k; return pts;
+      const mat=new THREE.PointsMaterial({ color:0xc9a227, size:isMobile?0.014:0.018, transparent:true, opacity:0.45, depthWrite:false, blending:THREE.AdditiveBlending });
+      const pts=new THREE.Points(geo,mat); pts.userData.layerIndex=k; return pts;
     }
-    for(i=0;i<STRATA;i++) goldGroup.add(makeGoldPoints(i));
+    for(let i=0;i<STRATA;i++) goldGroup.add(makeGoldPoints(i));
 
     // Scan slice + glow trail
-    var SCAN=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(SIZE*0.985,SCAN_H,SIZE*0.985)), new THREE.LineBasicMaterial({ color:0xc9a227 }));
-    var GLOW=new THREE.Mesh(new THREE.BoxGeometry(SIZE*0.985,SCAN_H,SIZE*0.985), new THREE.MeshBasicMaterial({ color:0xc9a227, transparent:true, opacity:0.12, blending:THREE.AdditiveBlending }));
-    var GLOW_T1=GLOW.clone(); GLOW_T1.material=GLOW.material.clone(); GLOW_T1.material.opacity=0.07; GLOW_T1.scale.y=1.8;
-    var GLOW_T2=GLOW.clone(); GLOW_T2.material=GLOW.material.clone(); GLOW_T2.material.opacity=0.04; GLOW_T2.scale.y=3.0;
+    const SCAN=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(SIZE*0.985,SCAN_H,SIZE*0.985)), new THREE.LineBasicMaterial({ color:0xc9a227 }));
+    const GLOW=new THREE.Mesh(new THREE.BoxGeometry(SIZE*0.985,SCAN_H,SIZE*0.985), new THREE.MeshBasicMaterial({ color:0xc9a227, transparent:true, opacity:0.12, blending:THREE.AdditiveBlending }));
+    const GLOW_T1=GLOW.clone(); GLOW_T1.material=GLOW.material.clone(); GLOW_T1.material.opacity=0.07; GLOW_T1.scale.y=1.8;
+    const GLOW_T2=GLOW.clone(); GLOW_T2.material=GLOW.material.clone(); GLOW_T2.material.opacity=0.04; GLOW_T2.scale.y=3.0;
     scene.add(SCAN,GLOW,GLOW_T1,GLOW_T2);
 
     // Clip land above slice
-    var plane=new THREE.Plane(new THREE.Vector3(0,-1,0),0);
-    var clipMat=new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, clippingPlanes:[plane], transparent:true, opacity:0.18 });
-    var clipLand=new THREE.Mesh(landGeo.clone(), clipMat); clipLand.rotation.x=-Math.PI/2; clipLand.position.y=HALF-0.001; scene.add(clipLand);
+    const plane=new THREE.Plane(new THREE.Vector3(0,-1,0),0);
+    const clipMat=new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, clippingPlanes:[plane], transparent:true, opacity:0.18 });
+    const clipLand=new THREE.Mesh(landGeo.clone(), clipMat); clipLand.rotation.x=-Math.PI/2; clipLand.position.y=HALF-0.001; scene.add(clipLand);
 
-    // Diagonal 2× orebody (POINT CLOUD — fastest & most compatible)
-    var oreUniforms={uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10}};
-    var ORE_POINTS=isMobile?4000:7000, rngOre=mulberry32(424242);
-    var opos=new Float32Array(ORE_POINTS*3);
-    var p0=new THREE.Vector3(-HALF*0.65,-HALF*0.25, HALF*0.65);
-    var p1=new THREE.Vector3( HALF*0.65, HALF*0.65,-HALF*0.65);
-    var dir=new THREE.Vector3().subVectors(p1,p0);
-    for(i=0;i<ORE_POINTS;i++){
-      var t=i/ORE_POINTS, base=new THREE.Vector3().copy(p0).addScaledVector(dir, t+(rngOre()-0.5)*0.06);
+    // Diagonal 2× orebody (point cloud)
+    const oreUniforms={uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10}};
+    const ORE_POINTS=isMobile?4000:7000, rngOre=mulberry32(424242);
+    const opos=new Float32Array(ORE_POINTS*3);
+    const p0=new THREE.Vector3(-HALF*0.65,-HALF*0.25, HALF*0.65);
+    const p1=new THREE.Vector3( HALF*0.65, HALF*0.65,-HALF*0.65);
+    const dir=new THREE.Vector3().subVectors(p1,p0);
+    for(let i=0;i<ORE_POINTS;i++){
+      const t=i/ORE_POINTS; const base=new THREE.Vector3().copy(p0).addScaledVector(dir, t+(rngOre()-0.5)*0.06);
       base.x+=(rngOre()-0.5)*0.60; base.y+=(rngOre()-0.5)*0.34; base.z+=(rngOre()-0.5)*0.60;
       opos[i*3]=base.x; opos[i*3+1]=base.y; opos[i*3+2]=base.z;
     }
-    var oreGeo=new THREE.BufferGeometry(); oreGeo.setAttribute('position', new THREE.BufferAttribute(opos,3));
-    var oreMat=new THREE.ShaderMaterial({
+    const oreGeo=new THREE.BufferGeometry(); oreGeo.setAttribute('position', new THREE.BufferAttribute(opos,3));
+    const oreMat=new THREE.ShaderMaterial({
       transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
       uniforms:{ uSliceY:oreUniforms.uSliceY, uSliceLagY:oreUniforms.uSliceLagY, uW:oreUniforms.uW,
                  uBase:{value:new THREE.Color(0x4a3d12)}, uGold:{value:new THREE.Color(0xc9a227)},
                  uSize:{value:isMobile?2.0:2.6} },
       vertexShader:'uniform float uSliceY,uSliceLagY,uW,uSize; varying float vH;'+
-      'void main(){ vec4 w=modelMatrix*vec4(position,1.0); float d=min(abs(w.y-uSliceY),abs(w.y-uSliceLagY));'+
-      'vH=smoothstep(uW*1.2,0.0,d); gl_Position=projectionMatrix*viewMatrix*w; gl_PointSize=uSize*(1.0+1.6*vH); }',
+                   'void main(){ vec4 w=modelMatrix*vec4(position,1.0); float d=min(abs(w.y-uSliceY),abs(w.y-uSliceLagY));'+
+                   'vH=smoothstep(uW*1.2,0.0,d); gl_Position=projectionMatrix*viewMatrix*w; gl_PointSize=uSize*(1.0+1.6*vH); }',
       fragmentShader:'precision mediump float; varying float vH; uniform vec3 uBase,uGold;'+
-      'void main(){ vec2 uv=gl_PointCoord-0.5; float r=length(uv); if(r>0.5) discard;'+
-      'float core=smoothstep(0.5,0.0,r); vec3 col=mix(uBase,uGold,vH); float a=core*(0.10+0.90*vH);'+
-      'gl_FragColor=vec4(col,a);} '
+                     'void main(){ vec2 uv=gl_PointCoord-0.5; float r=length(uv); if(r>0.5) discard;'+
+                     'float core=smoothstep(0.5,0.0,r); vec3 col=mix(uBase,uGold,vH); float a=core*(0.10+0.90*vH);'+
+                     'gl_FragColor=vec4(col,a);} '
     });
     scene.add(new THREE.Points(oreGeo,oreMat));
 
-    // Sparkle highlight near slice
-    var SPARK=isMobile?1000:1600, s=new Float32Array(SPARK*3);
-    for(i=0;i<SPARK;i++){ s[i*3]=(Math.random()-0.5)*SIZE*0.86; s[i*3+1]=(Math.random()-0.5)*SIZE*0.86; s[i*3+2]=(Math.random()-0.5)*SIZE*0.86; }
-    var sparkGeo=new THREE.BufferGeometry(); sparkGeo.setAttribute('position', new THREE.BufferAttribute(s,3));
-    var sparkMat=new THREE.ShaderMaterial({
+    // Sparkle near slice
+    const SPARK=isMobile?1000:1600; const s=new Float32Array(SPARK*3);
+    for(let i=0;i<SPARK;i++){ s[i*3]=(Math.random()-0.5)*SIZE*0.86; s[i*3+1]=(Math.random()-0.5)*SIZE*0.86; s[i*3+2]=(Math.random()-0.5)*SIZE*0.86; }
+    const sparkGeo=new THREE.BufferGeometry(); sparkGeo.setAttribute('position', new THREE.BufferAttribute(s,3));
+    const sparkMat=new THREE.ShaderMaterial({
       transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
       uniforms:{ uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10}, uSize:{value:isMobile?1.5:1.8},
                  uBase:{value:new THREE.Color(0x5a4a12)}, uGold:{value:new THREE.Color(0xc9a227)} },
       vertexShader:'uniform float uSliceY,uSliceLagY,uW,uSize; varying float vH;'+
-      'void main(){ vec4 w=modelMatrix*vec4(position,1.0); float d=min(abs(w.y-uSliceY),abs(w.y-uSliceLagY));'+
-      'vH=smoothstep(uW*1.2,0.0,d); gl_Position=projectionMatrix*viewMatrix*w; gl_PointSize=uSize*(1.0+1.4*vH);} ',
+                   'void main(){ vec4 w=modelMatrix*vec4(position,1.0); float d=min(abs(w.y-uSliceY),abs(w.y-uSliceLagY));'+
+                   'vH=smoothstep(uW*1.2,0.0,d); gl_Position=projectionMatrix*viewMatrix*w; gl_PointSize=uSize*(1.0+1.4*vH);} ',
       fragmentShader:'precision mediump float; varying float vH; uniform vec3 uBase,uGold;'+
-      'void main(){ vec2 uv=gl_PointCoord-0.5; float r=length(uv); if(r>0.5) discard;'+
-      'float core=smoothstep(0.5,0.0,r); vec3 col=mix(uBase,uGold,vH); float a=core*(0.05+0.95*vH);'+
-      'gl_FragColor=vec4(col,a);} '
+                     'void main(){ vec2 uv=gl_PointCoord-0.5; float r=length(uv); if(r>0.5) discard;'+
+                     'float core=smoothstep(0.5,0.0,r); vec3 col=mix(uBase,uGold,vH); float a=core*(0.05+0.95*vH);'+
+                     'gl_FragColor=vec4(col,a);} '
     });
     scene.add(new THREE.Points(sparkGeo,sparkMat));
 
     // Input + animation
-    var tAcc=0, dir=1, user=false, resTimer=null, SPEED=isMobile?0.144:0.192, RESUME=550;
-    function setFromX(x){ var r=renderer.domElement.getBoundingClientRect(); tAcc=clamp01((x-r.left)/r.width); }
-    renderer.domElement.addEventListener('pointerdown',function(e){ renderer.domElement.setPointerCapture(e.pointerId); user=true; el.classList.add('scrubbing'); clearTimeout(resTimer); setFromX(e.clientX); e.preventDefault(); },{passive:false});
-    renderer.domElement.addEventListener('pointermove',function(e){ if(user) setFromX(e.clientX); },{passive:true});
-    function end(){ if(!user) return; user=false; el.classList.remove('scrubbing'); clearTimeout(resTimer); resTimer=setTimeout(function(){},RESUME); }
+    let tAcc=0, dir=1, user=false, resumeTimer=null;
+    const SPEED=isMobile?0.144:0.192, RESUME=550;
+
+    function setFromX(x){ const r=renderer.domElement.getBoundingClientRect(); tAcc=clamp01((x-r.left)/r.width); }
+    renderer.domElement.addEventListener('pointerdown',e=>{ renderer.domElement.setPointerCapture(e.pointerId); user=true; el.classList.add('scrubbing'); clearTimeout(resumeTimer); setFromX(e.clientX); e.preventDefault(); }, {passive:false});
+    renderer.domElement.addEventListener('pointermove',e=>{ if(user) setFromX(e.clientX); }, {passive:true});
+    function end(){ if(!user) return; user=false; el.classList.remove('scrubbing'); clearTimeout(resumeTimer); resumeTimer=setTimeout(()=>{},RESUME); }
     renderer.domElement.addEventListener('pointerup',end,{passive:true});
     renderer.domElement.addEventListener('pointerleave',end,{passive:true});
     renderer.domElement.addEventListener('pointercancel',end,{passive:true});
 
-    var visible=true; (new IntersectionObserver(function(e){ visible=e[0]&&e[0].isIntersecting; },{threshold:0.1})).observe(el);
-    var yLag1=0.0, yLag2=0.0;
-    var clock=new THREE.Clock();
+    let visible=true;
+    if('IntersectionObserver' in window){
+      (new IntersectionObserver(e=>{ visible = e[0] ? e[0].isIntersecting : true; }, {threshold:0.1})).observe(el);
+    }
+
+    let yLag1=0.0, yLag2=0.0;
+    const clock=new THREE.Clock();
 
     function frame(){
-      var dt=clock.getDelta();
-      if(!user){ tAcc += dir*SPEED*dt; if(tAcc>1){tAcc=1;dir=-1;} else if(tAcc<0){tAcc=0;dir=1;} }
-      var y=yFor(tAcc), k1=4.0, k2=2.0;
-      yLag1 += (y - yLag1)*k1*dt; yLag2 += (y - yLag2)*k2*dt;
+      try{
+        const dt=clock.getDelta();
+        if(!user){ tAcc += dir*SPEED*dt; if(tAcc>1){tAcc=1;dir=-1;} else if(tAcc<0){tAcc=0;dir=1;} }
+        const y=yFor(tAcc);
+        const k1=4.0, k2=2.0; yLag1+=(y-yLag1)*k1*dt; yLag2+=(y-yLag2)*k2*dt;
 
-      SCAN.position.y=y; GLOW.position.y=y; GLOW_T1.position.y=yLag1; GLOW_T2.position.y=yLag2;
-      plane.constant=HALF-y;
+        SCAN.position.y=y; GLOW.position.y=y; GLOW_T1.position.y=yLag1; GLOW_T2.position.y=yLag2;
+        plane.constant=HALF-y;
 
-      oreUniforms.uSliceY.value=y; oreUniforms.uSliceLagY.value=yLag1;
-      sparkMat.uniforms.uSliceY.value=y; sparkMat.uniforms.uSliceLagY.value=yLag1;
+        oreUniforms.uSliceY.value=y; oreUniforms.uSliceLagY.value=yLag1;
+        sparkMat.uniforms.uSliceY.value=y; sparkMat.uniforms.uSliceLagY.value=yLag1;
 
-      // Subtle motion + fade of nearby layers
-      var et=clock.elapsedTime, idx=tAcc*(STRATA-1), fall=6;
-      land.rotation.z=Math.sin(et*0.08)*0.002;
-      strataGroup.children.forEach(function(ch){
-        var d=Math.abs((ch.userData.layerIndex||0)-idx), near=Math.max(0,1-d/fall);
-        ch.material.opacity=THREE.MathUtils.lerp(0.05,0.6,near);
-        ch.material.color.setHex(d<0.5?0xffffff:0xeaeaea);
-      });
+        // Subtle motion + near-layer fade
+        const idx=tAcc*(STRATA-1), fall=6, et=clock.elapsedTime;
+        land.rotation.z=Math.sin(et*0.08)*0.002;
+        strataGroup.children.forEach(ch=>{ const d=Math.abs((ch.userData.layerIndex||0)-idx); const near=Math.max(0,1-d/fall);
+          ch.material.opacity = lerp(0.05, 0.6, near);
+          ch.material.color.setHex(d<0.5?0xffffff:0xeaeaea);
+        });
 
-      renderer.render(scene,camera);
+        renderer.render(scene,camera);
+      } catch(e){ showError('Frame error', e); }
     }
+
     (function loop(){ if(visible) frame(); requestAnimationFrame(loop); })();
   }
 })([
