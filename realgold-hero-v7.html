@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RealGold — Hero Visualization (v8 transparent)</title>
+  <title>RealGold — Hero Visualization (v9 transparent + fast start)</title>
+  <!-- Networking hints to cut startup time -->
+  <link rel="dns-prefetch" href="https://unpkg.com">
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
+  <link rel="modulepreload" href="https://unpkg.com/three@0.160.0/build/three.module.js">
+  <link rel="modulepreload" href="https://unpkg.com/three@0.160.0/examples/jsm/objects/MarchingCubes.js">
   <style>
     :root{ --fg:#eaeaea; --gold:#c9a227; }
     html,body{height:100%}
@@ -17,18 +22,20 @@
   </style>
 </head>
 <body>
-  <div id="rg-root" aria-label="Animated 3D layered cube with gold seams and internal orebody; drag horizontally to scrub the scan" role="img"></div>
+  <div id="rg-root" aria-label="3D gold-in-ground visualization; drag horizontally to scrub the scan" role="img"></div>
   <noscript><div class="rg-fallback">Enable JavaScript to view the 3D visualization.</div></noscript>
 
   <script type="module">
     (async ()=>{
+      // URL params: ?zoom=1.35 (bigger)  ?dpr=1  ?quality=low|high|auto
+      const QS = new URLSearchParams(location.search);
+      const ZOOM = Math.max(0.75, Math.min(2.0, parseFloat(QS.get('zoom')||'1.25')));
+      const FORCE_DPR = parseFloat(QS.get('dpr')||'0');
+      const QUALITY = (QS.get('quality')||'auto').toLowerCase();
+
       let THREE;
       try { THREE = await import('three'); }
       catch{ THREE = await import('https://unpkg.com/three@0.160.0/build/three.module.js'); }
-
-      let MarchingCubes = null;
-      try { MarchingCubes = (await import('three/addons/objects/MarchingCubes.js')).MarchingCubes; }
-      catch{ try { MarchingCubes = (await import('https://unpkg.com/three@0.160.0/examples/jsm/objects/MarchingCubes.js')).MarchingCubes; } catch{} }
 
       const container = document.getElementById('rg-root');
       const IS_MOBILE = /Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
@@ -36,8 +43,9 @@
       if(!supportsWebGL){ container.innerHTML='<div class="rg-fallback">Your device does not support WebGL.</div>'; return; }
 
       // Transparent renderer
+      const DPR = Math.min((FORCE_DPR>0?FORCE_DPR:(window.devicePixelRatio||1)), IS_MOBILE?1.25:2);
       const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference: IS_MOBILE ? 'low-power' : 'high-performance' });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, IS_MOBILE?1.25:2));
+      renderer.setPixelRatio(DPR);
       renderer.setSize(container.clientWidth, container.clientHeight);
       renderer.setClearColor(0x000000, 0); // fully transparent
       renderer.localClippingEnabled = true;
@@ -45,12 +53,12 @@
 
       const scene = new THREE.Scene();
 
-      // Camera
+      // Camera (ZOOM makes cube appear bigger by reducing ortho size)
       let camera;
-      const ORTHO_SIZE = 3.6;
+      const BASE_ORTHO = 3.6;
       function makeOrtho(){
         const aspect = container.clientWidth/container.clientHeight;
-        const h=ORTHO_SIZE, w=ORTHO_SIZE*aspect;
+        const h=(BASE_ORTHO/ZOOM), w=(BASE_ORTHO/ZOOM)*aspect;
         camera = new THREE.OrthographicCamera(-w, w, h, -h, 0.1, 100);
         camera.position.set(4,4,4);
         camera.lookAt(0,0,0);
@@ -72,7 +80,7 @@
       function yFor(t){ return THREE.MathUtils.lerp(HALF-0.002-SCAN_H*0.5, -HALF+0.002+SCAN_H*0.5, t); }
 
       // Cube shell
-      const cube = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(SIZE,SIZE,SIZE)), new THREE.LineBasicMaterial({ color:0xeaeaea, transparent:true, opacity:0.85 }));
+      const cube = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(SIZE,SIZE,SIZE)), new THREE.LineBasicMaterial({ color:0xeaeaea, transparent:true, opacity:0.9 }));
       scene.add(cube);
 
       // Crown landmass
@@ -93,9 +101,9 @@
       function makeStratum(i){ const t=i/(STRATA_COUNT-1); const g=new THREE.PlaneGeometry(SIZE*0.96,SIZE*0.96,gridTop,gridTop); const p=g.attributes.position; const blend=lerp(0.75,0.35,t), amp=lerp(0.20,0.10,t)*HALF, freq=1.0+t*1.6, off=t*3.14159; for(let j=0;j<p.count;j++){ const x=p.getX(j)/SIZE+10.5, y=p.getY(j)/SIZE+10.5; const base=topHeights[j]||0; const n=fbm((x+off)*freq,(y-off)*freq); const candidate=(blend*base + (1.0-blend)*(n*0.48*HALF)); p.setZ(j,(candidate/(0.48*HALF))*amp);} p.needsUpdate=true; g.computeVertexNormals(); const edges=new THREE.EdgesGeometry(g); const opacity=lerp(0.5,0.1,t); const mat=new THREE.LineBasicMaterial({ color:0xeaeaea, transparent:true, opacity}); const mesh=new THREE.LineSegments(edges,mat); mesh.rotation.x=-Math.PI/2; mesh.position.y=yFor(t); mesh.userData.layerIndex=i; return mesh; }
       for(let i=1;i<STRATA_COUNT;i++) strataGroup.add(makeStratum(i));
 
-      // Gold seam particles (surface distributed)
+      // Surface gold spark points
       const goldGroup=new THREE.Group(); scene.add(goldGroup);
-      function makeGoldPoints(i){ const t=i/(STRATA_COUNT-1); const y=yFor(t); const count=IS_MOBILE?50:100; const geo=new THREE.BufferGeometry(); const pos=new Float32Array(count*3); let n=0, tries=0; while(n<count && tries<count*10){ tries++; const x=(Math.random()-0.5)*SIZE*0.92; const z=(Math.random()-0.5)*SIZE*0.92; const sx=x/SIZE+10.5+t*3.14159; const sy=z/SIZE+10.5-t*3.14159; const freq=1.0+t*1.6; const v=fbm(sx*freq, sy*freq); if(v>0.36+t*0.1){ pos[n*3]=x; pos[n*3+1]=y+(Math.random()-0.5)*SCAN_H*0.6; pos[n*3+2]=z; n++; } } geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0,n*3),3)); const mat=new THREE.PointsMaterial({ color:0xc9a227, size: IS_MOBILE ? 0.014 : 0.018, transparent:true, opacity:0.45, depthWrite:false, blending:THREE.AdditiveBlending}); const pts=new THREE.Points(geo,mat); pts.userData.layerIndex=i; return pts; }
+      function makeGoldPoints(i){ const t=i/(STRATA_COUNT-1); const y=yFor(t); const count=IS_MOBILE?40:80; const geo=new THREE.BufferGeometry(); const pos=new Float32Array(count*3); let n=0, tries=0; while(n<count && tries<count*10){ tries++; const x=(Math.random()-0.5)*SIZE*0.92; const z=(Math.random()-0.5)*SIZE*0.92; const sx=x/SIZE+10.5+t*3.14159; const sy=z/SIZE+10.5-t*3.14159; const freq=1.0+t*1.6; const v=fbm(sx*freq, sy*freq); if(v>0.36+t*0.1){ pos[n*3]=x; pos[n*3+1]=y+(Math.random()-0.5)*SCAN_H*0.6; pos[n*3+2]=z; n++; } } geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0,n*3),3)); const mat=new THREE.PointsMaterial({ color:0xc9a227, size: IS_MOBILE ? 0.014 : 0.018, transparent:true, opacity:0.45, depthWrite:false, blending:THREE.AdditiveBlending}); const pts=new THREE.Points(geo,mat); pts.userData.layerIndex=i; return pts; }
       for(let i=0;i<STRATA_COUNT;i++) goldGroup.add(makeGoldPoints(i));
 
       // Slice & glow (with trailing slabs)
@@ -110,164 +118,167 @@
       const clipMat=new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, clippingPlanes:[plane], transparent:true, opacity:0.18 });
       const clipLand=new THREE.Mesh(landGeo.clone(), clipMat); clipLand.rotation.x=-Math.PI/2; clipLand.position.y=HALF-0.001; scene.add(clipLand);
 
-      // --- Orebody (2x size, diagonal) ---
-      let Marching = null;
-      try { Marching = MarchingCubes; } catch{}
-      const useMC = !!Marching;
-      let oreUniforms;
-
-      if(useMC){
-        const res = IS_MOBILE ? 24 : 36;
-        oreUniforms = {
-          uSliceY: { value: 0.0 },
-          uSliceLagY: { value: 0.0 },
-          uHighlightWidth: { value: 0.10 },
-          uBaseColor: { value: new THREE.Color(0x4a3d12) },
-          uHiColor: { value: new THREE.Color(0xc9a227) },
-          uOpacity: { value: 0.22 }
-        };
-        const oreMat = new THREE.ShaderMaterial({
-          uniforms: oreUniforms,
-          transparent: true,
-          blending: THREE.NormalBlending,
-          vertexShader: `
-            uniform float uSliceY;
-            uniform float uSliceLagY;
-            uniform float uHighlightWidth;
-            varying float vH;
-            varying vec3 vNormal;
-            varying vec3 vWorld;
-            void main(){
-              vNormal = normalize(normalMatrix * normal);
-              vec4 world = modelMatrix * vec4(position,1.0);
-              vWorld = world.xyz;
-              float d0 = abs(vWorld.y - uSliceY);
-              float d1 = abs(vWorld.y - uSliceLagY);
-              float d = min(d0, d1);
-              vH = smoothstep(uHighlightWidth*1.4, 0.0, d);
-              gl_Position = projectionMatrix * viewMatrix * world;
-            }
-          `,
-          fragmentShader: `
-            precision mediump float;
-            varying float vH;
-            varying vec3 vNormal;
-            uniform vec3 uBaseColor;
-            uniform vec3 uHiColor;
-            uniform float uOpacity;
-            void main(){
-              vec3 L = normalize(vec3(0.5, 0.9, 0.3));
-              float lambert = clamp(dot(normalize(vNormal), L), 0.0, 1.0);
-              vec3 base = uBaseColor * (0.35 + 0.85*lambert);
-              vec3 hi = mix(base, uHiColor, pow(vH, 0.55)) + vH*0.2;
-              float a = uOpacity * (0.65 + 0.9*vH);
-              gl_FragColor = vec4(hi, a);
-            }
-          `
-        });
-
-        const mc = new Marching(res, oreMat, true, true);
-        mc.position.set(0,0,0);
-        mc.scale.set(SIZE*0.96, SIZE*0.96, SIZE*0.96);
-        mc.isolation = 55;
-        scene.add(mc);
-
-        function buildOrebody(){
-          mc.reset();
-          const rng = mulberry32(424242);
-          const nBalls = IS_MOBILE ? 26 : 34;
-          const p0 = new THREE.Vector3(0.14, 0.20, 0.86);
-          const p1 = new THREE.Vector3(0.86, 0.88, 0.14);
-          const dir = new THREE.Vector3().subVectors(p1,p0);
-          for(let i=0;i<nBalls;i++){
-            const t = i/(nBalls-1);
-            const pt = new THREE.Vector3().copy(p0).addScaledVector(dir, t);
-            const wob = (Math.sin(t*8.0)+Math.sin(t*3.5+1.2))*0.010;
-            pt.x += (rng()-0.5)*0.05 + wob;
-            pt.y += (rng()-0.5)*0.03;
-            pt.z += (rng()-0.5)*0.05 - wob;
-            const thickness = 2.0 * (0.045 + 0.06*Math.sin(t*Math.PI));
-            mc.addBall(pt.x, pt.y, pt.z, thickness, 0.8);
-            if(i % 5 === 0){
-              const b = pt.clone().add(new THREE.Vector3((rng()-0.5)*0.14, (rng()-0.5)*0.06, (rng()-0.5)*0.14));
-              mc.addBall(b.x, b.y, b.z, thickness*0.8, 0.8);
-            }
+      // --- Progressive orebody: start fast (points), upgrade to MarchingCubes in idle on desktop ---
+      let oreUniforms = { uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10} };
+      const ORE_POINTS = (QUALITY==='low'||IS_MOBILE) ? 4000 : 7000;
+      const rng = mulberry32(424242);
+      const pos = new Float32Array(ORE_POINTS*3);
+      const p0 = new THREE.Vector3(-HALF*0.65, -HALF*0.25, HALF*0.65);
+      const p1 = new THREE.Vector3(HALF*0.65, HALF*0.65, -HALF*0.65);
+      const dir = new THREE.Vector3().subVectors(p1,p0);
+      for(let i=0;i<ORE_POINTS;i++){
+        const t = (i/ORE_POINTS);
+        const base = new THREE.Vector3().copy(p0).addScaledVector(dir, t + (rng()-0.5)*0.06);
+        base.x += (rng()-0.5)*0.60;
+        base.y += (rng()-0.5)*0.34;
+        base.z += (rng()-0.5)*0.60;
+        pos[i*3+0]=base.x; pos[i*3+1]=base.y; pos[i*3+2]=base.z;
+      }
+      const orePointsGeo = new THREE.BufferGeometry();
+      orePointsGeo.setAttribute('position', new THREE.BufferAttribute(pos,3));
+      const orePointsMat = new THREE.ShaderMaterial({
+        transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
+        uniforms:{
+          uSliceY: oreUniforms.uSliceY,
+          uSliceLagY: oreUniforms.uSliceLagY,
+          uW: oreUniforms.uW,
+          uBase: { value: new THREE.Color(0x4a3d12) },
+          uGold: { value: new THREE.Color(0xc9a227) },
+          uSize: { value: IS_MOBILE? 2.0 : 2.6 }
+        },
+        vertexShader:`
+          uniform float uSliceY; uniform float uSliceLagY; uniform float uW; uniform float uSize;
+          varying float vH;
+          void main(){
+            vec4 world = modelMatrix * vec4(position,1.0);
+            float d0 = abs(world.y - uSliceY);
+            float d1 = abs(world.y - uSliceLagY);
+            float d = min(d0,d1);
+            vH = smoothstep(uW*1.2, 0.0, d);
+            gl_Position = projectionMatrix * viewMatrix * world;
+            gl_PointSize = uSize * (1.0 + 1.6*vH);
           }
-          for(let j=0;j< (IS_MOBILE? 28:40); j++){
-            const qx = 0.16 + rng()*0.68;
-            const qy = 0.16 + rng()*0.68;
-            const qz = 0.16 + rng()*0.68;
-            mc.addBall(qx,qy,qz, 0.036, 0.9);
+        `,
+        fragmentShader:`
+          precision mediump float;
+          varying float vH;
+          uniform vec3 uBase; uniform vec3 uGold;
+          void main(){
+            vec2 uv = gl_PointCoord - 0.5;
+            float r = length(uv);
+            if(r>0.5) discard;
+            float core = smoothstep(0.5, 0.0, r);
+            vec3 col = mix(uBase, uGold, vH);
+            float a = core * (0.10 + 0.90*vH);
+            gl_FragColor = vec4(col, a);
           }
-          mc.update();
-          mc.rotation.set(0.28, 0.0, -0.18);
-        }
-        buildOrebody();
+        `
+      });
+      const orePoints = new THREE.Points(orePointsGeo, orePointsMat);
+      scene.add(orePoints);
 
-      } else {
-        // Fallback: denser, wider diagonal point-cloud orebody (2x envelope)
-        oreUniforms = { uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10} };
-        const ORE_POINTS = IS_MOBILE ? 7000 : 12000;
-        const rng = mulberry32(424242);
-        const pos = new Float32Array(ORE_POINTS*3);
-        const p0 = new THREE.Vector3(-HALF*0.65, -HALF*0.25, HALF*0.65);
-        const p1 = new THREE.Vector3(HALF*0.65, HALF*0.65, -HALF*0.65);
-        const dir = new THREE.Vector3().subVectors(p1,p0);
-        for(let i=0;i<ORE_POINTS;i++){
-          const t = (i/ORE_POINTS);
-          const base = new THREE.Vector3().copy(p0).addScaledVector(dir, t + (rng()-0.5)*0.06);
-          base.x += (rng()-0.5)*0.60;
-          base.y += (rng()-0.5)*0.34;
-          base.z += (rng()-0.5)*0.60;
-          pos[i*3+0]=base.x; pos[i*3+1]=base.y; pos[i*3+2]=base.z;
-        }
-        const geo = new THREE.BufferGeometry();
-        geo.setAttribute('position', new THREE.BufferAttribute(pos,3));
-        const mat = new THREE.ShaderMaterial({
-          transparent:true, depthWrite:false, blending:THREE.AdditiveBlending,
-          uniforms:{
-            uSliceY: oreUniforms.uSliceY,
-            uSliceLagY: oreUniforms.uSliceLagY,
-            uW: oreUniforms.uW,
-            uBase: { value: new THREE.Color(0x4a3d12) },
-            uGold: { value: new THREE.Color(0xc9a227) },
-            uSize: { value: IS_MOBILE? 2.0 : 2.8 }
-          },
-          vertexShader:`
-            uniform float uSliceY; uniform float uSliceLagY; uniform float uW; uniform float uSize;
-            varying float vH;
-            void main(){
-              vec4 world = modelMatrix * vec4(position,1.0);
-              float d0 = abs(world.y - uSliceY);
-              float d1 = abs(world.y - uSliceLagY);
-              float d = min(d0,d1);
-              vH = smoothstep(uW*1.2, 0.0, d);
-              gl_Position = projectionMatrix * viewMatrix * world;
-              gl_PointSize = uSize * (1.0 + 1.6*vH);
+      // Desktop/high quality: upgrade to MC in idle time
+      const idle = window.requestIdleCallback || (cb=>setTimeout(()=>cb({didTimeout:false,timeRemaining:()=>16}), 600));
+      if(QUALITY!=='low' && !IS_MOBILE){
+        idle(async ()=>{
+          try{
+            let { MarchingCubes } = await import('https://unpkg.com/three@0.160.0/examples/jsm/objects/MarchingCubes.js');
+            const res = 36;
+            const oreUniformsMC = {
+              uSliceY: oreUniforms.uSliceY,
+              uSliceLagY: oreUniforms.uSliceLagY,
+              uHighlightWidth: { value: 0.10 },
+              uBaseColor: { value: new THREE.Color(0x4a3d12) },
+              uHiColor: { value: new THREE.Color(0xc9a227) },
+              uOpacity: { value: 0.22 }
+            };
+            const oreMat = new THREE.ShaderMaterial({
+              uniforms: oreUniformsMC,
+              transparent: true,
+              blending: THREE.NormalBlending,
+              vertexShader: `
+                uniform float uSliceY;
+                uniform float uSliceLagY;
+                uniform float uHighlightWidth;
+                varying float vH;
+                varying vec3 vNormal;
+                varying vec3 vWorld;
+                void main(){
+                  vNormal = normalize(normalMatrix * normal);
+                  vec4 world = modelMatrix * vec4(position,1.0);
+                  vWorld = world.xyz;
+                  float d0 = abs(vWorld.y - uSliceY);
+                  float d1 = abs(vWorld.y - uSliceLagY);
+                  float d = min(d0, d1);
+                  vH = smoothstep(uHighlightWidth*1.4, 0.0, d);
+                  gl_Position = projectionMatrix * viewMatrix * world;
+                }
+              `,
+              fragmentShader: `
+                precision mediump float;
+                varying float vH;
+                varying vec3 vNormal;
+                uniform vec3 uBaseColor;
+                uniform vec3 uHiColor;
+                uniform float uOpacity;
+                void main(){
+                  vec3 L = normalize(vec3(0.5, 0.9, 0.3));
+                  float lambert = clamp(dot(normalize(vNormal), L), 0.0, 1.0);
+                  vec3 base = uBaseColor * (0.35 + 0.85*lambert);
+                  vec3 hi = mix(base, uHiColor, pow(vH, 0.55)) + vH*0.2;
+                  float a = uOpacity * (0.65 + 0.9*vH);
+                  gl_FragColor = vec4(hi, a);
+                }
+              `
+            });
+
+            const mc = new MarchingCubes(res, oreMat, true, true);
+            mc.position.set(0,0,0);
+            mc.scale.set(SIZE*0.96, SIZE*0.96, SIZE*0.96);
+            mc.isolation = 55;
+            scene.add(mc);
+
+            function buildOrebody(){
+              mc.reset();
+              const rng2 = mulberry32(424242);
+              const nBalls = 34;
+              const p0 = new THREE.Vector3(0.14, 0.20, 0.86);
+              const p1 = new THREE.Vector3(0.86, 0.88, 0.14);
+              const dir = new THREE.Vector3().subVectors(p1,p0);
+              for(let i=0;i<nBalls;i++){
+                const t = i/(nBalls-1);
+                const pt = new THREE.Vector3().copy(p0).addScaledVector(dir, t);
+                const wob = (Math.sin(t*8.0)+Math.sin(t*3.5+1.2))*0.010;
+                pt.x += (rng2()-0.5)*0.05 + wob;
+                pt.y += (rng2()-0.5)*0.03;
+                pt.z += (rng2()-0.5)*0.05 - wob;
+                const thickness = 2.0 * (0.045 + 0.06*Math.sin(t*Math.PI));
+                mc.addBall(pt.x, pt.y, pt.z, thickness, 0.8);
+                if(i % 5 === 0){
+                  const b = pt.clone().add(new THREE.Vector3((rng2()-0.5)*0.14, (rng2()-0.5)*0.06, (rng2()-0.5)*0.14));
+                  mc.addBall(b.x, b.y, b.z, thickness*0.8, 0.8);
+                }
+              }
+              for(let j=0;j< 36; j++){
+                const qx = 0.16 + rng2()*0.68;
+                const qy = 0.16 + rng2()*0.68;
+                const qz = 0.16 + rng2()*0.68;
+                mc.addBall(qx,qy,qz, 0.036, 0.9);
+              }
+              mc.update();
+              mc.rotation.set(0.28, 0.0, -0.18);
             }
-          `,
-          fragmentShader:`
-            precision mediump float;
-            varying float vH;
-            uniform vec3 uBase; uniform vec3 uGold;
-            void main(){
-              vec2 uv = gl_PointCoord - 0.5;
-              float r = length(uv);
-              if(r>0.5) discard;
-              float core = smoothstep(0.5, 0.0, r);
-              vec3 col = mix(uBase, uGold, vH);
-              float a = core * (0.10 + 0.90*vH);
-              gl_FragColor = vec4(col, a);
-            }
-          `
+            buildOrebody();
+
+            // swap: remove point cloud after MC appears
+            scene.remove(orePoints);
+          }catch(e){ console.warn('MC upgrade skipped', e); }
         });
-        const pts = new THREE.Points(geo, mat);
-        scene.add(pts);
       }
 
       // Sparkle points near slice
       const sparkleGeo = new THREE.BufferGeometry();
-      const SPARK = IS_MOBILE ? 1200 : 2000;
+      const SPARK = IS_MOBILE ? 1000 : 1600;
       const spos = new Float32Array(SPARK*3);
       for(let i=0;i<SPARK;i++){
         spos[i*3 + 0] = (Math.random()-0.5)*SIZE*0.86;
@@ -281,7 +292,7 @@
           uSliceY: { value: 0.0 },
           uSliceLagY: { value: 0.0 },
           uW: { value: 0.10 },
-          uSize: { value: IS_MOBILE? 1.6 : 2.0 },
+          uSize: { value: IS_MOBILE? 1.5 : 1.8 },
           uBase: { value: new THREE.Color(0x5a4a12) },
           uGold: { value: new THREE.Color(0xc9a227) }
         },
@@ -376,10 +387,9 @@
 
         plane.constant = HALF - y;
 
-        if(oreUniforms){
-          if(oreUniforms.uSliceY) oreUniforms.uSliceY.value = y;
-          if(oreUniforms.uSliceLagY) oreUniforms.uSliceLagY.value = yLag1;
-        }
+        // share uniforms
+        oreUniforms.uSliceY.value = y;
+        oreUniforms.uSliceLagY.value = yLag1;
         sparkleMat.uniforms.uSliceY.value = y;
         sparkleMat.uniforms.uSliceLagY.value = yLag1;
 
