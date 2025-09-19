@@ -3,15 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>RealGold — Hero Visualization (v8 transparent)</title>
+  <title>RealGold — Hero Visualization (v7)</title>
   <style>
-    :root{ --fg:#eaeaea; --gold:#c9a227; }
+    :root{ --bg:#0a0a0a; --fg:#eaeaea; --gold:#c9a227; }
     html,body{height:100%}
-    html,body{background:transparent!important}
-    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system}
-    #rg-root{position:fixed; inset:0; touch-action:none; cursor:grab; background:transparent!important}
+    body{margin:0;background:var(--bg);font-family:ui-sans-serif,system-ui,-apple-system}
+    #rg-root{position:fixed; inset:0; touch-action:none; cursor:grab}
     #rg-root.scrubbing{cursor:grabbing}
-    canvas{display:block;width:100%;height:100%;background-color:transparent!important}
+    canvas{display:block;width:100%;height:100%}
     .rg-fallback{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:#ccc; font-size:14px; text-align:center; padding:1rem}
     @media (prefers-reduced-motion: reduce){ .rg-anim{animation:none!important} }
   </style>
@@ -35,11 +34,10 @@
       const supportsWebGL = (() => { try{ const c=document.createElement('canvas'); return !!(c.getContext('webgl')||c.getContext('experimental-webgl')); }catch(e){ return false; } })();
       if(!supportsWebGL){ container.innerHTML='<div class="rg-fallback">Your device does not support WebGL.</div>'; return; }
 
-      // Transparent renderer
-      const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:true, powerPreference: IS_MOBILE ? 'low-power' : 'high-performance' });
+      const renderer = new THREE.WebGLRenderer({ antialias:true, alpha:false, powerPreference: IS_MOBILE ? 'low-power' : 'high-performance' });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio||1, IS_MOBILE?1.25:2));
       renderer.setSize(container.clientWidth, container.clientHeight);
-      renderer.setClearColor(0x000000, 0); // fully transparent
+      renderer.setClearColor('#0a0a0a', 1);
       renderer.localClippingEnabled = true;
       container.appendChild(renderer.domElement);
 
@@ -110,10 +108,8 @@
       const clipMat=new THREE.MeshBasicMaterial({ color:0xffffff, wireframe:true, clippingPlanes:[plane], transparent:true, opacity:0.18 });
       const clipLand=new THREE.Mesh(landGeo.clone(), clipMat); clipLand.rotation.x=-Math.PI/2; clipLand.position.y=HALF-0.001; scene.add(clipLand);
 
-      // --- Orebody (2x size, diagonal) ---
-      let Marching = null;
-      try { Marching = MarchingCubes; } catch{}
-      const useMC = !!Marching;
+      // --- Orebody ---
+      const useMC = !!MarchingCubes;
       let oreUniforms;
 
       if(useMC){
@@ -166,10 +162,10 @@
           `
         });
 
-        const mc = new Marching(res, oreMat, true, true);
+        const mc = new MarchingCubes(res, oreMat, true, true);
         mc.position.set(0,0,0);
         mc.scale.set(SIZE*0.96, SIZE*0.96, SIZE*0.96);
-        mc.isolation = 55;
+        mc.isolation = 55; // a bit lower to keep the thicker field continuous
         scene.add(mc);
 
         function buildOrebody(){
@@ -182,10 +178,11 @@
           for(let i=0;i<nBalls;i++){
             const t = i/(nBalls-1);
             const pt = new THREE.Vector3().copy(p0).addScaledVector(dir, t);
-            const wob = (Math.sin(t*8.0)+Math.sin(t*3.5+1.2))*0.010;
+            const wob = (Math.sin(t*8.0)+Math.sin(t*3.5+1.2))*0.010; // a touch more wobble
             pt.x += (rng()-0.5)*0.05 + wob;
             pt.y += (rng()-0.5)*0.03;
             pt.z += (rng()-0.5)*0.05 - wob;
+            // 2x thickness vs v6
             const thickness = 2.0 * (0.045 + 0.06*Math.sin(t*Math.PI));
             mc.addBall(pt.x, pt.y, pt.z, thickness, 0.8);
             if(i % 5 === 0){
@@ -193,6 +190,7 @@
               mc.addBall(b.x, b.y, b.z, thickness*0.8, 0.8);
             }
           }
+          // larger halos
           for(let j=0;j< (IS_MOBILE? 28:40); j++){
             const qx = 0.16 + rng()*0.68;
             const qy = 0.16 + rng()*0.68;
@@ -204,8 +202,9 @@
         }
         buildOrebody();
 
+        // store uniforms handle
       } else {
-        // Fallback: denser, wider diagonal point-cloud orebody (2x envelope)
+        // Fallback: denser, wider diagonal point-cloud orebody
         oreUniforms = { uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10} };
         const ORE_POINTS = IS_MOBILE ? 7000 : 12000;
         const rng = mulberry32(424242);
@@ -376,6 +375,7 @@
 
         plane.constant = HALF - y;
 
+        // highlights
         if(oreUniforms){
           if(oreUniforms.uSliceY) oreUniforms.uSliceY.value = y;
           if(oreUniforms.uSliceLagY) oreUniforms.uSliceLagY.value = yLag1;
