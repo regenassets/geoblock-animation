@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test GeoBlock Animation in iframe</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #1a1a1a;
+      color: #fff;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin-bottom: 20px;
+    }
+    .test-box {
+      background: #2a2a2a;
+      border: 2px solid #c9a227;
+      padding: 0;
+      margin-bottom: 30px;
+    }
+    .test-box h2 {
+      margin: 0;
+      padding: 10px 15px;
+      background: #c9a227;
+      color: #000;
+      font-size: 16px;
+    }
+    iframe {
+      display: block;
+      width: 100%;
+      height: 600px;
+      border: none;
+      margin: 0;
+      padding: 0;
+    }
+    .info {
+      padding: 15px;
+      background: #333;
+      margin-top: 10px;
+      font-size: 14px;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>GeoBlock Animation iframe Embed Test</h1>
+    <p>This page tests the GeoBlock animation embedded in an iframe to verify there's no spacing around it.</p>
+
+    <div class="test-box">
+      <h2>Test 1: Standard iframe Embed</h2>
+      <iframe
+        src="realgold-hero-v7.html"
+        title="GeoBlock Animation"
+        loading="lazy"
+      ></iframe>
+      <div class="info">
+        ✓ The gold border should touch all edges of the animation with no gaps<br>
+        ✓ No white/transparent space around the animation<br>
+        ✓ Animation should fill the entire iframe area
+      </div>
+    </div>
+
+    <div class="test-box">
+      <h2>Test 2: Smaller Size (400px height)</h2>
+      <iframe
+        src="realgold-hero-v7.html"
+        title="GeoBlock Animation"
+        loading="lazy"
+        style="height: 400px;"
+      ></iframe>
+      <div class="info">
+        ✓ Even at different heights, no spacing should appear<br>
+        ✓ Animation scales properly
+      </div>
+    </div>
+
+    <div class="test-box">
+      <h2>Test 3: Responsive (50% width)</h2>
+      <iframe
+        src="realgold-hero-v7.html"
+        title="GeoBlock Animation"
+        loading="lazy"
+        style="width: 50%; height: 500px; margin: 0 auto;"
+      ></iframe>
+      <div class="info">
+        ✓ Centered iframe with custom dimensions<br>
+        ✓ No spacing issues at different aspect ratios
+      </div>
+    </div>
+  </div>
+</body>
+</html>
