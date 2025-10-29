@@ -60,9 +60,9 @@
 
       // Constants
       const SIZE=2.4, HALF=SIZE/2;
-      const STRATA_COUNT = IS_MOBILE ? 24 : 48;
+      const STRATA_COUNT = IS_MOBILE ? 18 : 32;
       const SCAN_H = 0.008*SIZE;
-      const gridTop = IS_MOBILE ? 64 : 96;
+      const gridTop = IS_MOBILE ? 48 : 64;
 
       // Utils
       function lerp(a,b,t){return a+(b-a)*t}
@@ -95,7 +95,7 @@
 
       // Gold seam particles (surface distributed)
       const goldGroup=new THREE.Group(); scene.add(goldGroup);
-      function makeGoldPoints(i){ const t=i/(STRATA_COUNT-1); const y=yFor(t); const count=IS_MOBILE?50:100; const geo=new THREE.BufferGeometry(); const pos=new Float32Array(count*3); let n=0, tries=0; while(n<count && tries<count*10){ tries++; const x=(Math.random()-0.5)*SIZE*0.92; const z=(Math.random()-0.5)*SIZE*0.92; const sx=x/SIZE+10.5+t*3.14159; const sy=z/SIZE+10.5-t*3.14159; const freq=1.0+t*1.6; const v=fbm(sx*freq, sy*freq); if(v>0.36+t*0.1){ pos[n*3]=x; pos[n*3+1]=y+(Math.random()-0.5)*SCAN_H*0.6; pos[n*3+2]=z; n++; } } geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0,n*3),3)); const mat=new THREE.PointsMaterial({ color:0xc9a227, size: IS_MOBILE ? 0.014 : 0.018, transparent:true, opacity:0.45, depthWrite:false, blending:THREE.AdditiveBlending}); const pts=new THREE.Points(geo,mat); pts.userData.layerIndex=i; return pts; }
+      function makeGoldPoints(i){ const t=i/(STRATA_COUNT-1); const y=yFor(t); const count=IS_MOBILE?35:65; const geo=new THREE.BufferGeometry(); const pos=new Float32Array(count*3); let n=0, tries=0; while(n<count && tries<count*10){ tries++; const x=(Math.random()-0.5)*SIZE*0.92; const z=(Math.random()-0.5)*SIZE*0.92; const sx=x/SIZE+10.5+t*3.14159; const sy=z/SIZE+10.5-t*3.14159; const freq=1.0+t*1.6; const v=fbm(sx*freq, sy*freq); if(v>0.36+t*0.1){ pos[n*3]=x; pos[n*3+1]=y+(Math.random()-0.5)*SCAN_H*0.6; pos[n*3+2]=z; n++; } } geo.setAttribute('position', new THREE.BufferAttribute(pos.subarray(0,n*3),3)); const mat=new THREE.PointsMaterial({ color:0xc9a227, size: IS_MOBILE ? 0.016 : 0.021, transparent:true, opacity:0.50, depthWrite:false, blending:THREE.AdditiveBlending}); const pts=new THREE.Points(geo,mat); pts.userData.layerIndex=i; return pts; }
       for(let i=0;i<STRATA_COUNT;i++) goldGroup.add(makeGoldPoints(i));
 
       // Slice & glow (with trailing slabs)
@@ -117,7 +117,7 @@
       let oreUniforms;
 
       if(useMC){
-        const res = IS_MOBILE ? 24 : 36;
+        const res = IS_MOBILE ? 20 : 28;
         oreUniforms = {
           uSliceY: { value: 0.0 },
           uSliceLagY: { value: 0.0 },
@@ -156,10 +156,9 @@
             uniform vec3 uHiColor;
             uniform float uOpacity;
             void main(){
-              vec3 L = normalize(vec3(0.5, 0.9, 0.3));
-              float lambert = clamp(dot(normalize(vNormal), L), 0.0, 1.0);
+              float lambert = clamp(dot(vNormal, vec3(0.5, 0.9, 0.3)), 0.0, 1.0);
               vec3 base = uBaseColor * (0.35 + 0.85*lambert);
-              vec3 hi = mix(base, uHiColor, pow(vH, 0.55)) + vH*0.2;
+              vec3 hi = mix(base, uHiColor, vH*vH) + vH*0.2;
               float a = uOpacity * (0.65 + 0.9*vH);
               gl_FragColor = vec4(hi, a);
             }
@@ -175,7 +174,7 @@
         function buildOrebody(){
           mc.reset();
           const rng = mulberry32(424242);
-          const nBalls = IS_MOBILE ? 26 : 34;
+          const nBalls = IS_MOBILE ? 22 : 28;
           const p0 = new THREE.Vector3(0.14, 0.20, 0.86);
           const p1 = new THREE.Vector3(0.86, 0.88, 0.14);
           const dir = new THREE.Vector3().subVectors(p1,p0);
@@ -193,7 +192,7 @@
               mc.addBall(b.x, b.y, b.z, thickness*0.8, 0.8);
             }
           }
-          for(let j=0;j< (IS_MOBILE? 28:40); j++){
+          for(let j=0;j< (IS_MOBILE? 22:32); j++){
             const qx = 0.16 + rng()*0.68;
             const qy = 0.16 + rng()*0.68;
             const qz = 0.16 + rng()*0.68;
@@ -207,7 +206,7 @@
       } else {
         // Fallback: denser, wider diagonal point-cloud orebody (2x envelope)
         oreUniforms = { uSliceY:{value:0.0}, uSliceLagY:{value:0.0}, uW:{value:0.10} };
-        const ORE_POINTS = IS_MOBILE ? 7000 : 12000;
+        const ORE_POINTS = IS_MOBILE ? 5000 : 8000;
         const rng = mulberry32(424242);
         const pos = new Float32Array(ORE_POINTS*3);
         const p0 = new THREE.Vector3(-HALF*0.65, -HALF*0.25, HALF*0.65);
@@ -267,7 +266,7 @@
 
       // Sparkle points near slice
       const sparkleGeo = new THREE.BufferGeometry();
-      const SPARK = IS_MOBILE ? 1200 : 2000;
+      const SPARK = IS_MOBILE ? 800 : 1300;
       const spos = new Float32Array(SPARK*3);
       for(let i=0;i<SPARK;i++){
         spos[i*3 + 0] = (Math.random()-0.5)*SIZE*0.86;
@@ -350,9 +349,12 @@
       renderer.domElement.addEventListener('pointercancel', (e)=>{ endScrub(); }, {passive:true});
       renderer.domElement.addEventListener('pointerleave', (e)=>{ endScrub(); }, {passive:true});
 
-      // Visibility
+      // Visibility and pause when not in view
       let visible=true;
-      const io=new IntersectionObserver(entries=>{ visible=entries[0]?.isIntersecting ?? true; }, {threshold:0.1});
+      const io=new IntersectionObserver(entries=>{
+        visible=entries[0]?.isIntersecting ?? true;
+        if(!visible) clock.stop(); else clock.start();
+      }, {threshold:0.1});
       io.observe(container);
 
       // trailing y positions for long decay
